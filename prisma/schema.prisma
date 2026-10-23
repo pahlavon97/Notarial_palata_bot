@@ -1,0 +1,210 @@
+// Prisma Schema for O'zbekiston Respublikasi Notarial Palatasi Telegram Bot
+// Database: PostgreSQL with optimized indexes for legal search and audit
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Language {
+  UZ_LATIN
+  UZ_CYRILLIC
+  RU
+}
+
+enum UserRole {
+  CITIZEN
+  NOTARY
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum LegalSourceCode {
+  LEX_UZ
+  ADVICE_UZ
+  E_NOTARIUS
+}
+
+enum LegalCategory {
+  MEROS                // Inheritance
+  AVTOMOBIL            // Automobile sale/registration
+  UY_JOY               // Real estate
+  ISHONCHNOMA          // Power of attorney
+  HADYA                // Gift contract
+  NIKOH_SHARTNOMASI    // Prenuptial agreement
+  NOTARIAL_TASDIQLASH  // Notarial certification
+  DAVLAT_BOJI          // State duties and fees
+  BOSHQA               // Other notarial acts
+}
+
+enum SecurityEventType {
+  RATE_LIMIT_TRIGGERED
+  SPAM_BURST_BLOCKED
+  SUSPICIOUS_QUERY
+  SSRF_ATTEMPT
+  UNAUTHORIZED_ACCESS
+  CIRCUIT_BREAKER_OPEN
+}
+
+// User Profile (Privacy-preserving, NO passport or PINFL collected)
+model User {
+  id              String            @id @default(uuid())
+  telegramId      BigInt            @unique
+  username        String?
+  firstName       String?
+  lastName        String?
+  role            UserRole          @default(CITIZEN)
+  language        Language          @default(UZ_LATIN)
+  isActive        Boolean           @default(true)
+  isBlocked       Boolean           @default(false)
+  blockedReason   String?
+  lastActiveAt    DateTime          @default(now())
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  searchQueries   SearchAuditLog[]
+
+  @@index([telegramId])
+  @@index([language])
+  @@index([role])
+}
+
+// Official Legal Sources
+model LegalSource {
+  id              String            @id @default(uuid())
+  code            LegalSourceCode   @unique
+  name            String            // e.g. "Lex.uz - Qonunchilik ma'lumotlari milliy bazasi"
+  baseUrl         String
+  description     String?
+  isActive        Boolean           @default(true)
+  lastCheckedAt   DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  documents       LegalDocument[]
+}
+
+// Legal Documents (Laws, Codes, Cabinet Decrees, Regulations)
+model LegalDocument {
+  id              String            @id @default(uuid())
+  sourceId        String
+  source          LegalSource       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  
+  titleUzLatin    String
+  titleUzCyrillic String
+  titleRu         String
+  
+  docNumber       String?           // e.g. "343-I", "ZRU-600"
+  docDate         DateTime?
+  category        LegalCategory
+  
+  officialUrl     String            // Verified official URL on Lex.uz or Advice.uz
+  isCurrentEdition Boolean          @default(true)
+  editionDate     DateTime?
+  
+  summaryUzLatin  String?           @db.Text
+  summaryUzCyrillic String?         @db.Text
+  summaryRu       String?           @db.Text
+  
+  fullTextUzLatin String?           @db.Text
+  fullTextUzCyrillic String?        @db.Text
+  fullTextRu      String?           @db.Text
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  articles        LegalArticle[]
+
+  @@index([category])
+  @@index([docNumber])
+  @@index([sourceId])
+  @@index([isCurrentEdition])
+}
+
+// Specific Articles & Clauses (e.g. Article 1112 of Civil Code, Article 5 of Law on State Duty)
+model LegalArticle {
+  id              String            @id @default(uuid())
+  documentId      String
+  document        LegalDocument     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  articleNumber   String            // e.g. "Modda 1112", "5-modda"
+  titleUzLatin    String
+  titleUzCyrillic String
+  titleRu         String
+  
+  contentUzLatin  String            @db.Text
+  contentUzCyrillic String          @db.Text
+  contentRu       String            @db.Text
+  
+  officialUrl     String            // Direct anchor URL, e.g. https://lex.uz/docs/111189#1112
+  tags            String[]          // Keywords for fast semantic index
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([documentId])
+  @@index([articleNumber])
+}
+
+// Official Notary Directory (Verified official data, cached from E-Notarius)
+model NotaryOffice {
+  id              String            @id @default(uuid())
+  region          String            // e.g. "Toshkent shahri", "Samarqand viloyati"
+  district        String            // e.g. "Yunusobod tumani", "Samarqand shahri"
+  fullName        String            // Notary official full name
+  licenseNumber   String?           // Official notary license number
+  address         String            // Physical office address
+  phone           String            // Official contact telephone
+  workingHours    String            // e.g. "Dushanba - Juma: 09:00 - 18:00"
+  officialUrl     String            // https://e-notarius.uz/...
+  verifiedAt      DateTime          @default(now())
+  isActive        Boolean           @default(true)
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([region])
+  @@index([district])
+  @@index([isActive])
+}
+
+// Minimal Privacy-Preserving Search Audit (No PII stored, query hash + execution metrics)
+model SearchAuditLog {
+  id              String            @id @default(uuid())
+  userId          String?
+  user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  language        Language
+  category        LegalCategory?
+  queryHash       String            // SHA-256 hash of query to detect hot topics without storing raw text
+  querySnippet    String?           // Max 64 chars of normalized query for analytics
+  resultsCount    Int               @default(0)
+  responseTimeMs  Int
+  sourceUsed      LegalSourceCode?
+  isFallbackUsed  Boolean           @default(false)
+  
+  createdAt       DateTime          @default(now())
+
+  @@index([createdAt])
+  @@index([category])
+  @@index([language])
+  @@index([queryHash])
+}
+
+// Security Events (Rate limiting, suspicious attacks, prompt injection traps)
+model SecurityEvent {
+  id              String            @id @default(uuid())
+  eventType       SecurityEventType
+  identifier      String            // Telegram user ID or IP hash
+  details         String            @db.Text
+  ipAddress       String?
+  createdAt       DateTime          @default(now())
+
+  @@index([eventType])
+  @@index([identifier])
+  @@index([createdAt])
+}

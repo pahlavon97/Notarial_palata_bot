@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: notarial_palata_bot
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_MODE=${TELEGRAM_MODE:-polling}
+      - WEBHOOK_DOMAIN=${WEBHOOK_DOMAIN:-}
+      - WEBHOOK_PATH=/webhook/telegram
+      - WEBHOOK_SECRET_TOKEN=${WEBHOOK_SECRET_TOKEN:-}
+      - DATABASE_URL=postgresql://notary_user:notary_secure_pwd_2026@postgres:5432/notarial_palata_db?schema=public
+      - REDIS_URL=redis://redis:6379
+      - RATE_LIMIT_USER_MAX=20
+      - RATE_LIMIT_BURST_MAX=5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - notarial_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: notarial_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: notary_user
+      POSTGRES_PASSWORD: notary_secure_pwd_2026
+      POSTGRES_DB: notarial_palata_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notary_user -d notarial_palata_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - notarial_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: notarial_redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - notarial_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  notarial_net:
+    driver: bridge
